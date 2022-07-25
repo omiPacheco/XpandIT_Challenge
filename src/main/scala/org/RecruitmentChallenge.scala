@@ -1,96 +1,113 @@
 package org
-import org.apache.spark.sql.{SaveMode, SparkSession}
-import org.apache.spark.sql.functions.{asc, col}
-import org.apache.spark.sql.types.{DateType, DoubleType, IntegerType, LongType, StringType, StructType}
+import com.sun.org.apache.xerces.internal.impl.xpath.regex.RegularExpression
+import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession, functions}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.functions.{asc, col, collect_list, collect_set, first, row_number}
+import org.apache.spark.sql.types.{DateType, DoubleType, IntegerType, StringType, StructType}
 
 import java.io.File
 
 object RecruitmentChallenge extends App{
 
-  val spark = SparkSession.builder()
-    .master("local[1]")
-    .appName("Recruitment Challenge")
-    .getOrCreate();
+    val spark = SparkSession.builder()
+      .master("local[1]")
+      .appName("Recruitment Challenge")
+      .getOrCreate();
 
+  /**
+   * NaN values removed before group to avoid losing data.
+   */
+  val df1 = spark.read
+      .format("csv")
+      .option("header","true")
+      .load("./datasets/googleplaystore_user_reviews.csv")
+      .drop("Translated_Review","Sentiment","Sentiment_Subjectivity")
+      .withColumn("Sentiment_Polarity",col("Sentiment_Polarity").cast(DoubleType))
+      .na
+      .fill(0,Array("Sentiment_Polarity"))
+      .groupBy("App")
+      .avg("Sentiment_Polarity")
+      .withColumnRenamed("avg(Sentiment_Polarity)","Average_Sentiment_Polarity")
 
-  val user_reviews_schema = new StructType()
-    .add("App",StringType,true)
-    .add("Review",StringType,true)
-    .add("Sentiment",StringType,true)
-    .add("Polarity",DoubleType,true)
-    .add("Subjectivity",DoubleType,true)
+    //df1.show(100)
 
+    // ------------------------------------------------------------------------------------------------- //
 
+    val apps_df = spark.read
+      .option("header","true")
+      .option("quote", "\"")
+      .option("escape", "\"")
+      .option("encoding","cp1252")
+      .csv("./datasets/googleplaystore.csv")
 
-  val df1_schema = new StructType()
-    .add("App",StringType,true)
-    .add("Average_Sentiment_Polarity",DoubleType,true)
+    // Remove NaNs only after casting to Double
+    val best_apps_df = apps_df
+      .withColumn("Rating",col("Rating").cast(DoubleType))
+      .na
+      .fill(0,Array("Rating"))
+      .filter(col("Rating") >= 4)
+      .sort(col("Rating").desc)
 
-  val user_reviews_df = spark.read
-    .format("csv")
-    .option("header","true")
-    .schema(user_reviews_schema)
-    .load("./datasets/googleplaystore_user_reviews.csv")
+    /* Write the contents of the dataframe, including the headers, and changing the delimiter */
+    best_apps_df.write.mode(SaveMode.Overwrite).option("delimiter","§").option("header",true).format("csv").save("./datasets/best_apps")
 
-  val df1 = user_reviews_df.drop("Review","Sentiment","Subjectivity")
-    .groupBy("App")
-    .avg("Polarity")
-    .na
-    .fill(0,Array("avg(Polarity)"))
-    .withColumnRenamed("avg(Polarity)","Average_Sentiment_Polarity")
+    /* Get the file where the dataframe was written */
+    val directory = new File("./datasets/best_apps/")
 
+    /* Check if it exists and if it is a directory
+    *  Then get the .csv file in it
+    *  Create a File giving it the desirable name
+    *  End by deleting all files from the folder and then the folder itself
+    * */
+    if(directory.exists && directory.isDirectory){
+      val file = directory.listFiles.filter(_.getName.endsWith(".csv")).head
 
+      val dest = new File("./datasets/best_apps.csv")
+      if(dest.exists) dest.delete()
+      file.renameTo(dest)
+      directory.listFiles.map(f => f.delete())
+      directory.delete()
+    }
 
-  // ------------------------------------------------------------------------------------------------- //
+  // --------------------------------------------------------------------------------------------- //
 
-  val apps_schema = new StructType()
-    .add("App",StringType,true)
-    .add("Category",StringType,true)
-    .add("Rating",DoubleType,true)
-    .add("Reviews",LongType,true)
-    .add("Size",StringType,true)
-    .add("Installs",StringType,true)
-    .add("Type",StringType,true)
-    .add("Price",DoubleType,true)
-    .add("Content_Rating",StringType,true)
-    .add("Genres",StringType,true)
-    .add("Last Updated",DateType,true)
-    .add("Current Version",StringType,true)
-    .add("Android Version",StringType,true)
+  val categories_df = apps_df.groupBy("App")
+    .agg(collect_set("Category"))
+    .withColumnRenamed("collect_set(Category)","Categories")
 
-  val apps_df = spark.read
-    .format("csv")
-    .option("header","true")
-    .schema(apps_schema)
-    .load("./datasets/googleplaystore.csv")
-    .na
-    .fill(0,Array("Rating"))
-    .filter(col("Rating") >= 4)
-    .sort(col("Rating").desc)
+  val df3_grouped = apps_df.groupBy("App").agg(max("Rating") as "Rating",
+    first("Category") as "Category",
+    first("Reviews") as "Reviews",
+    first("Size") as "Size",
+    first("Installs") as "Installs",
+    first("Type") as "Type",
+    first("Price") as "Price",
+    first("Content Rating") as "Content_Rating",
+    first("Genres") as "Genres",
+    first("Last Updated") as "Last_Updated",
+    first("Current Ver") as "Current_Version",
+    first("Android Ver") as "Minimum_Android_Version")
 
-  /* Write the contents of the dataframe, including the headers, and changing the delimiter */
-  apps_df.write.mode(SaveMode.Overwrite).option("delimiter","§").option("header",true).format("csv").save("./datasets/best_apps")
+  val df3_unordered = df3_grouped
+    .join(categories_df,Seq("App"),"inner")
+    .drop(col("Category"))
 
-  /* Get the file where the dataframe was written */
-  val directory = new File("./datasets/best_apps/")
+  val columns: Array[String] = df3_unordered.columns
+  val reorderedColumnNames: Array[String] = Array(columns(0),
+    columns(12),
+    columns(1),
+    columns(2),
+    columns(3),
+    columns(4),
+    columns(5),
+    columns(6),
+    columns(7),
+    columns(8),
+    columns(9),
+    columns(10),
+    columns(11))
+  val df3: DataFrame = df3_unordered.select(reorderedColumnNames.head, reorderedColumnNames.tail: _*)
 
-  /* Check if it exists and if it is a directory
-  *  Then get the .csv file in it
-  *  Create a File giving it the desirable name
-  *  End by deleting all files from the folder and then the folder itself
-  * */
-  if(directory.exists && directory.isDirectory){
-    val file = directory.listFiles.filter(_.getName.endsWith(".csv")).head
-
-    val dest = new File("./datasets/best_apps.csv")
-    if(dest.exists) dest.delete()
-    file.renameTo(dest)
-    directory.listFiles.map(f => f.delete())
-    directory.delete()
-  }
-
-  // ------------------------------------------------------------------------------------------------- //
-
-
-
+  val reg_exp = "([0-9]+)(M|k|\\+)|(Varies with device)".r
+  df3.withColumn("Size",col("Size"))
 }

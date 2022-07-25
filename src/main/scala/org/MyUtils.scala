@@ -1,5 +1,0 @@
-package org
-
-object MyUtils {
-
-}
