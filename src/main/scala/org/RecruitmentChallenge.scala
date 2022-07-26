@@ -1,18 +1,41 @@
 package org
-import com.sun.org.apache.xerces.internal.impl.xpath.regex.RegularExpression
-import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession, functions}
+import org.apache.spark.sql.{Column, DataFrame, SaveMode, SparkSession, functions}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.functions.{asc, col, collect_list, collect_set, first, row_number}
 import org.apache.spark.sql.types.{DateType, DoubleType, IntegerType, StringType, StructType}
+import org.apache.spark.sql._
 
 import java.io.File
+import java.util
+import scala.collection.mutable.ListBuffer
 
 object RecruitmentChallenge extends App{
+  val spark = SparkSession.builder()
+    .master("local[1]")
+    .appName("Recruitment Challenge")
+    .getOrCreate();
 
-    val spark = SparkSession.builder()
-      .master("local[1]")
-      .appName("Recruitment Challenge")
-      .getOrCreate();
+  def transformSize(dataFrame: DataFrame): Column ={
+    var sizes_seq = new ListBuffer[Double]()
+    val reg_exp = "([0-9]+(\\.[0-9]+)?)(M|k|\\+)|(Varies with device)".r
+
+    for (row <- df3.select("Size").rdd.collect) {
+      val match_result = reg_exp.findAllIn(row(0).toString)
+      match_result.group(3) match {
+        case "M" => sizes_seq += match_result.group(1).toDouble * 1000000
+        case "k" => sizes_seq += match_result.group(1).toDouble * 1000
+        case "+" => sizes_seq += match_result.group(1).toDouble
+        case anything => sizes_seq += 0.0
+      }
+
+    }
+
+    println(sizes_seq)
+    return dataFrame.col("Size")
+  }
+
+
+
 
   /**
    * NaN values removed before group to avoid losing data.
@@ -106,8 +129,13 @@ object RecruitmentChallenge extends App{
     columns(9),
     columns(10),
     columns(11))
+
   val df3: DataFrame = df3_unordered.select(reorderedColumnNames.head, reorderedColumnNames.tail: _*)
 
-  val reg_exp = "([0-9]+)(M|k|\\+)|(Varies with device)".r
-  df3.withColumn("Size",col("Size"))
+  df3.withColumn("Size",transformSize(df3))
+
+  //transformSize(df3.select("Size"))
+  //df3.select("Size").foreach( element => {
+  //  df3.withColumn("New Column",transformSize(col("Size")))
+  //})
 }
