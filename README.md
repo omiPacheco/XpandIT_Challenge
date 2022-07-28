@@ -2,6 +2,8 @@
 author: Daniel Faria
 date: 28/07/2022
 topic: XpandIT Challenge
+scala_version: 2.13.8
+spark_version: 3.3.0
 ---
 
 # XpandIT Spark 2 Recruitment Challenge
