@@ -12,7 +12,7 @@ object RecruitmentChallenge extends App{
   val spark = SparkSession.builder().appName("Recruitment Challenge").config("spark.master","local[*]").getOrCreate()
   import spark.implicits._
 
-  def transformSize(dataFrame: DataFrame): DataFrame = {
+  def transformSizeAndPrice(dataFrame: DataFrame): DataFrame = {
     import spark.implicits._
     var sizes_seq = new ListBuffer[(String,Double,Double,Array[String])]()
 
@@ -98,8 +98,6 @@ object RecruitmentChallenge extends App{
       .avg("Sentiment_Polarity")
       .withColumnRenamed("avg(Sentiment_Polarity)","Average_Sentiment_Polarity")
 
-    //df1.show(100)
-
     // ------------------------------------------------------------------------------------------------- //
 
     val apps_df = spark.read
@@ -161,7 +159,7 @@ object RecruitmentChallenge extends App{
     .join(categories_df,Seq("App"),"inner")
     .drop(col("Category"))
 
-  val new_col = transformSize(df3_unordered)
+  val new_col = transformSizeAndPrice(df3_unordered)
 
   val df3_typed = df3_unordered.join(new_col,Seq("App"),"inner")
     .drop("Size","Genres","Price")
@@ -185,7 +183,6 @@ object RecruitmentChallenge extends App{
     columns(8))
 
   val df3: DataFrame = df3_typed.select(reorderedColumnNames.head, reorderedColumnNames.tail: _*)
-  //FALTA MUDAR O TIPO DA DATA STRING -----> DATE
 
   /* -------------------------------------------------------------------------------------------------- */
   val cleaned_df = df1.join(df3,Seq("App"),"inner")
