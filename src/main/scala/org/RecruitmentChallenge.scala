@@ -1,40 +1,86 @@
 package org
-import org.apache.spark.sql.{Column, DataFrame, SaveMode, SparkSession, functions}
+import org.apache.spark.sql.{Column, DataFrame, Dataset, SaveMode, SparkSession, functions}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.functions.{asc, col, collect_list, collect_set, first, row_number}
-import org.apache.spark.sql.types.{DateType, DoubleType, IntegerType, StringType, StructType}
-import org.apache.spark.sql._
+import org.apache.spark.sql.types.{DateType, DoubleType, IntegerType, StringType, StructField, StructType}
 
 import java.io.File
 import java.util
 import scala.collection.mutable.ListBuffer
 
 object RecruitmentChallenge extends App{
-  val spark = SparkSession.builder()
-    .master("local[1]")
-    .appName("Recruitment Challenge")
-    .getOrCreate();
+  val spark = SparkSession.builder().appName("Recruitment Challenge").config("spark.master","local[*]").getOrCreate()
+  import spark.implicits._
 
-  def transformSize(dataFrame: DataFrame): Column ={
-    var sizes_seq = new ListBuffer[Double]()
-    val reg_exp = "([0-9]+(\\.[0-9]+)?)(M|k|\\+)|(Varies with device)".r
+  def transformSize(dataFrame: DataFrame): DataFrame = {
+    import spark.implicits._
+    var sizes_seq = new ListBuffer[(String,Double,Double,Array[String])]()
 
-    for (row <- df3.select("Size").rdd.collect) {
-      val match_result = reg_exp.findAllIn(row(0).toString)
-      match_result.group(3) match {
-        case "M" => sizes_seq += match_result.group(1).toDouble * 1000000
-        case "k" => sizes_seq += match_result.group(1).toDouble * 1000
-        case "+" => sizes_seq += match_result.group(1).toDouble
-        case anything => sizes_seq += 0.0
+    val reg_exp_size = "([0-9]+(\\.[0-9]+)?)(M|k|\\+)|(Varies with device)".r
+    val reg_exp_price = "\\$([0-9]+(\\.[0-9]+)?)".r
+
+    for (row <- dataFrame.select( "App", "Size","Price","Genres").rdd.collect) {
+      val match_result_size = reg_exp_size.findAllIn(row(1).toString)
+      val match_result_price = reg_exp_price.findAllIn(row(2).toString)
+
+
+      var price_dollar: Double = 0.0
+
+      val genres_array = row(3).toString.split(";").toArray
+
+      if(reg_exp_price.matches(row(2).toString)){
+        price_dollar = match_result_price.group(1).toDouble
+      }else {
+        price_dollar = 0.0
+
+      }
+
+      match_result_size.group(3) match {
+        case "M" => sizes_seq += ((row(0).toString,
+          match_result_size.group(1).toDouble,
+          price_dollar*0.9,
+          genres_array))
+        case "k" => sizes_seq += ((row(0).toString,
+          match_result_size.group(1).toDouble/1024,
+          price_dollar*0.9,
+          genres_array))
+        case "+" => sizes_seq += ((row(0).toString,
+          /*match_result.group(1).toDouble) duvida sobre como tratar este elemento*/0.001,
+          price_dollar*0.9,
+          genres_array))
+        case anything => sizes_seq += ((row(0).toString,
+          0.0,
+          price_dollar*0.9,
+          genres_array))
       }
 
     }
-
-    println(sizes_seq)
-    return dataFrame.col("Size")
+    val aux_ds = spark.createDataset(sizes_seq.toSeq).toDF()
+      .withColumnRenamed("_1","App")
+      .withColumnRenamed("_2","NSize")
+      .withColumnRenamed("_3","NPrice")
+      .withColumnRenamed("_4","NGenres")
+    return aux_ds
   }
 
+  def metrics_aux(dataFrame: DataFrame): DataFrame = {
+    val aux_1 = dataFrame.withColumn("Genres",col("Genres").getItem(0))
+      .groupBy("Genres")
+      .count()
 
+    val aux_2 = dataFrame.withColumn("Genres",col("Genres").getItem(0))
+      .withColumn("Rating",col("Rating").cast(DoubleType))
+      .groupBy("Genres")
+      .avg("Rating","Average_Sentiment_Polarity")
+      .withColumnRenamed("avg(Rating)","Average_Rating")
+      .withColumnRenamed("avg(Average_Sentiment_Polarity)","Average_Sentiment_Polarity")
+
+    val aux = aux_1.join(aux_2,Seq("Genres"),"inner")
+      .withColumnRenamed("Genres","Genre")
+      .withColumnRenamed("count","Count")
+
+    return aux
+  }
 
 
   /**
@@ -115,27 +161,41 @@ object RecruitmentChallenge extends App{
     .join(categories_df,Seq("App"),"inner")
     .drop(col("Category"))
 
-  val columns: Array[String] = df3_unordered.columns
+  val new_col = transformSize(df3_unordered)
+
+  val df3_typed = df3_unordered.join(new_col,Seq("App"),"inner")
+    .drop("Size","Genres","Price")
+    .withColumnRenamed("NSize","Size")
+    .withColumnRenamed("NGenres","Genres")
+    .withColumnRenamed("NPrice","Price")
+
+  val columns: Array[String] = df3_typed.columns
   val reorderedColumnNames: Array[String] = Array(columns(0),
-    columns(12),
+    columns(9),
     columns(1),
     columns(2),
+    columns(10),
     columns(3),
     columns(4),
+    columns(11),
     columns(5),
+    columns(12),
     columns(6),
     columns(7),
-    columns(8),
-    columns(9),
-    columns(10),
-    columns(11))
+    columns(8))
 
-  val df3: DataFrame = df3_unordered.select(reorderedColumnNames.head, reorderedColumnNames.tail: _*)
+  val df3: DataFrame = df3_typed.select(reorderedColumnNames.head, reorderedColumnNames.tail: _*)
+  //FALTA MUDAR O TIPO DA DATA STRING -----> DATE
 
-  df3.withColumn("Size",transformSize(df3))
+  /* -------------------------------------------------------------------------------------------------- */
+  val cleaned_df = df1.join(df3,Seq("App"),"inner")
+  cleaned_df.write.mode("overwrite").option("compression","gzip").parquet("./datasets/googleplaystore_cleaned")
 
-  //transformSize(df3.select("Size"))
-  //df3.select("Size").foreach( element => {
-  //  df3.withColumn("New Column",transformSize(col("Size")))
-  //})
+  /* ---------------------------------------------------------------------------------------------------- */
+
+  val df4_useful_info = df3.join(df1,Seq("App"),"inner")
+    .drop("Categories","App","Reviews","Size","Installs","Type","Price","Content_Rating","Last_Updated","Current_Version","Minimum_Android_Version")
+
+  val df4 = metrics_aux(df4_useful_info)
+  df4.write.mode("overwrite").option("compression","gzip").parquet("./datasets/googleplaystore_metrics")
 }
